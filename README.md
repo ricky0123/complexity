@@ -15,4 +15,4 @@ I created this project with [PureScript](https://pursuit.purescript.org/), a lan
 
 ## Development
 
-Clone the repository, then run `npm run build`. After doing this, you will be able to run `npm run dev` to start a local server and view the site in your browser.
+Clone the repository, then run `npm i` and `npm run build`. After doing this, you will be able to run `npm run dev` to start a local server and view the site in your browser.
