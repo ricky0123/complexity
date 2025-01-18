@@ -16,3 +16,7 @@ I created this project with [PureScript](https://pursuit.purescript.org/), a lan
 ## Development
 
 Clone the repository, then run `npm i` and `npm run build`. After doing this, you will be able to run `npm run dev` to start a local server and view the site in your browser.
+
+## Citations
+
+Agüera y Arcas, B., Alakuijala, J., Evans, J., Laurie, B., Mordvintsev, A., Niklasson, E., Randazzo, E., & Versari, L. (2024). Computational Life: How Well-formed, Self-replicating Programs Emerge from Simple Interaction. arXiv preprint arXiv:2406.19108.
