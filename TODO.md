@@ -1,0 +1,12 @@
+# TODO
+- [ ] In addition to tracking the number of computations in the program, track the number of executed computations throughout the execution of the program - could be higher
+- [ ] Make population and program objects to reduce runtime cost of element access + updating
+- [ ] track exact population mean computation by arithmetic. Need to update population object to include nComputations for each program
+- [ ] Refactor BF implementation
+- [ ] [Create "AppM" monad with "Navigate" capability](https://github.com/thomashoneyman/purescript-halogen-realworld/blob/c3f1f709daa397760f68b1f363e93f27a78ea59e/src/AppM.purs#L24)
+- [ ] Make it look good on small laptop screens
+- [ ] stop writing "newRecord" to graph a million times
+- [ ] is firefox slowing down because of receiving messages from worker? Add parameter to only update x% of time
+- [ ] send the program itself in these messages and have clicking on point on graph open execution in new tab
+- [ ] "heartbeat" - if no messages from worker for a long time, assume it's dead and show error
+- [ ] implement "token" method from paper
