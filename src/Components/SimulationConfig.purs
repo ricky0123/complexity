@@ -32,7 +32,7 @@ data Action
   = Receive FormContext
   | Eval FormlessAction
 
-initialValues = { populationSize: "10000", programSize: "64" }
+initialValues = { populationSize: "200000", programSize: "64" }
 
 component :: forall query output m. MonadAff m => H.Component query Unit output m
 component = F.formless { liftAction: Eval } initialValues $ H.mkComponent
@@ -100,7 +100,7 @@ component = F.formless { liftAction: Eval } initialValues $ H.mkComponent
                       , HE.onValueInput actions.populationSize.handleChange
                       , HE.onBlur actions.populationSize.handleBlur
                       , case fields.populationSize.result of
-                          Nothing -> HP.placeholder "10000"
+                          Nothing -> HP.placeholder "200000"
                           Just (Left _) -> HP.attr (HH.AttrName "aria-invalid") "true"
                           Just (Right _) -> HP.attr (HH.AttrName "aria-invalid") "false"
                       ]

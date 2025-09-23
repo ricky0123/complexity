@@ -7,6 +7,7 @@ import Data.Char
 import Data.Maybe
 import Prelude
 import Utils.Log
+import Utils.Helpers (formatElapsedTime)
 
 import Control.Monad.Except (Except, runExcept)
 import Control.Monad.Except (runExcept)
@@ -155,6 +156,7 @@ timer val = do
     H.liftEffect $ HS.notify listener val
   pure emitter
 
+
 render :: forall cs m. MonadEffect m => State -> H.ComponentHTML Action cs m
 render st = HH.div_
   [ HH.h1
@@ -170,7 +172,7 @@ render st = HH.div_
           , HH.text "Average number of computations: "
           , HH.text $ show st.lastComputations
           , HH.br_
-          , HH.text $ "Time elapsed: " <> (show $ Int.round $ unwrap st.elapsed) <> " seconds"
+          , HH.text $ "Time elapsed: " <> formatElapsedTime st.elapsed
           , HH.br_
           , HH.text $ "Interactions per second: " <> (show $ Int.round (toNumber st.nInteractions / unwrap st.elapsed))
           ]

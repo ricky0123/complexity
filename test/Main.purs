@@ -9,6 +9,8 @@ import Test.Spec.Reporter
 import Test.Spec.Runner.Node
 
 import BrainFuck.Program (BrainFuckTape, executeBrainFuckProgram, getInitialBrainFuckExecutionContext, parseBrainFuckProgram, unParseBrainFuckProgram)
+import Utils.Helpers (formatElapsedTime)
+import Data.Time.Duration (Seconds(..))
 import Effect (Effect)
 
 main :: Effect Unit
@@ -18,6 +20,72 @@ main = runSpecAndExitProcess [consoleReporter] spec
 
 spec :: Spec Unit
 spec = do
+  describe "formatElapsedTime" do
+    for_ [
+      {
+        name: "zero seconds",
+        input: Seconds 0.0,
+        expected: "0 seconds"
+      },
+      {
+        name: "single second",
+        input: Seconds 1.0,
+        expected: "1 sec"
+      },
+      {
+        name: "multiple seconds",
+        input: Seconds 30.0,
+        expected: "30 secs"
+      },
+      {
+        name: "single minute",
+        input: Seconds 60.0,
+        expected: "1 min"
+      },
+      {
+        name: "multiple minutes",
+        input: Seconds 150.0,
+        expected: "2 mins 30 secs"
+      },
+      {
+        name: "single hour",
+        input: Seconds 3600.0,
+        expected: "1 hr"
+      },
+      {
+        name: "multiple hours",
+        input: Seconds 7500.0,
+        expected: "2 hrs 5 mins"
+      },
+      {
+        name: "single day",
+        input: Seconds 86400.0,
+        expected: "1 day"
+      },
+      {
+        name: "multiple days",
+        input: Seconds 90000.0,
+        expected: "1 day 1 hr"
+      },
+      {
+        name: "complex time with all units",
+        input: Seconds 93784.0,
+        expected: "1 day 2 hrs 3 mins 4 secs"
+      },
+      {
+        name: "fractional seconds round down",
+        input: Seconds 1.4,
+        expected: "1 sec"
+      },
+      {
+        name: "fractional seconds round up",
+        input: Seconds 1.6,
+        expected: "2 secs"
+      }
+    ] \t -> do
+      it t.name do
+        formatElapsedTime t.input `shouldEqual` t.expected
+
   describe "BrainFuck execution" do
     for_ [ 
       {
