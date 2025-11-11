@@ -217,6 +217,12 @@ mainComponent = Hooks.component \_ _ -> Hooks.do
               [ HH.text
                   "Computational Life: How Well-formed, Self-replicating Programs Emerge from Simple Interaction"
               ]
+          , HH.text ". The source code is available on "
+          , HH.a
+              [ HP.href "https://github.com/ricky0123/complexity"
+              , HP.target "_blank"
+              ]
+              [ HH.text "GitHub" ]
           , HH.text "."
           ]
       , if (not startDemo) then HH.div_
