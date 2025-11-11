@@ -1,11 +1,7 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "builds": [
-    {
-      "src": "dist/**/*",
-      "use": "@vercel/static"
-    }
-  ],
+  "buildCommand": "npm install && npm run build",
+  "outputDirectory": "build",
   "headers": [
     {
       "source": "/(.*)",
