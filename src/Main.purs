@@ -1,289 +1,340 @@
 module Main where
 
-import BrainFuck.Program
-import Components.BrainFuckExecution
-import Data.Array
-import Data.Char
-import Data.Maybe
 import Prelude
 
-import BrainFuck.Examples (selfReplicatingTape)
-import Components.Simulation as Simulation
-import Components.SimulationConfig as SimulationConfig
-import Data.Either (hush)
-import Data.Foldable (oneOf)
+import BF.Compression (fflateGZipSync)
+import BF.Const (defaultNPrograms, defaultProgramLength)
+import BF.Data.ArrayView
+  ( Float32Array
+  , SharedArrayBuffer
+  , Uint32Array
+  , Uint8Array
+  , fromSharedBuffer
+  , index
+  , slice
+  , writeAt
+  )
+import BF.Data.Utils (randomSharedArrayBuffer, zerosSharedArrayBuffer)
+import BF.Metrics
+  ( Metrics
+  , getNInteractions
+  , metricsFromBuffers
+  , newMetricsBuffers
+  , readRecordLatest
+  )
+import BF.Permutation (newPermutationBuffer)
+import BF.Signals (newMasterCommandBuffer, newWorkerStatusBuffer)
+import BF.SimulationConfig (WorkerConfigMessage)
+import Control.Monad.Rec.Class (Step(..), forever, tailRec, tailRecM)
+import Control.Monad.Rec.Class (forever)
+import Data.Array ((..))
+import Data.DateTime.Instant (Instant, diff)
+import Data.Foldable (for_)
+import Data.Function.Uncurried (Fn2, runFn2)
+import Data.Int (fromString, toNumber)
 import Data.Int as Int
-import Data.String as S
-import Data.String.CodeUnits as CodeUnits
+import Data.Maybe (Maybe(..), fromMaybe)
+import Data.Number as Number
+import Data.Symbol (class IsSymbol)
+import Data.Time (Millisecond)
+import Data.Time.Duration (class Duration, Milliseconds(..), Seconds(..))
+import Data.Tuple (Tuple(..))
+import Data.Tuple.Nested ((/\))
 import Effect (Effect)
-import Effect.Aff.Class (class MonadAff)
-import Effect.Class (class MonadEffect)
+import Effect.Aff (Aff, delay, error, forkAff, killFiber, launchAff_, runAff_)
+import Effect.Aff.Class (class MonadAff, liftAff)
+import Effect.Class (class MonadEffect, liftEffect)
 import Effect.Console (log)
-import Formless as F
+import Effect.Now (now)
+import Effect.Uncurried (EffectFn2, EffectFn3, runEffectFn2, runEffectFn3)
 import Halogen as H
 import Halogen.Aff as HA
 import Halogen.HTML as HH
 import Halogen.HTML.Events as HE
+import Halogen.HTML.Properties (InputType(..))
 import Halogen.HTML.Properties as HP
-import Halogen.Query.Event (eventListener)
+import Halogen.Hooks (class HookNewtype, type (<>), Hook, HookM, StateId, UseEffect)
+import Halogen.Hooks as Hooks
 import Halogen.Subscription as HS
 import Halogen.VDom.Driver (runUI)
-import Routing.Hash (matches, matchesWith, setHash, getHash, match)
-import Routing.Match (Match, bool, end, int, list, lit, nonempty, num, param, params, str)
+import Log (_debug, getTimeElapsedString)
+import Plot (createLineChart)
+import Prim.Row as Row
+import Record (get)
 import Type.Proxy (Proxy(..))
-import Utils.HTML (_classes)
-import Web.Event.Event as E
-import Web.HTML (window)
-import Web.HTML.HTMLDocument as HTMLDocument
-import Web.HTML.Window (document)
-import Web.UIEvent.KeyboardEvent as KE
-import Web.UIEvent.KeyboardEvent.EventTypes as KET
-import Components.ExecutionForm as ExecutionForm
-
-data Route' = Home | SimulationRoute String String | SimulationConfigRoute | ExecutionRoute String
-
-derive instance eqRoute' :: Eq Route'
-
-home :: Match Route'
-home = Home <$ end
-
-simulationConfig :: Match Route'
-simulationConfig = SimulationConfigRoute <$ (lit "simulation" <* lit "config") <* end
-
-simulationExecution :: Match Route'
-simulationExecution = SimulationRoute <$> (lit "simulation" *> param "population_size") <*> param "program_length" <* end
-
-execution :: Match Route'
-execution = ExecutionRoute <$> ((lit "execution") *> (param "program")) <* end
-
-route'' :: Match Route'
-route'' = oneOf
-  [ home
-  , simulationConfig
-  , simulationExecution
-  , execution
-  ]
-
-route' :: Match (Maybe Route')
-route' = oneOf
-  [ Just <$> route''
-  , pure Nothing
-  ]
-
-main :: Effect Unit
-main = HA.runHalogenAff do
-  body <- HA.awaitBody
-  runUI baseComponent {} body
-
-data Action = Initialize | RouteChanged (Maybe Route') | SetHash String
-
-type Slots =
-  ( brainfuck :: forall query. H.Slot query Void Int
-  , simulation :: forall query. H.Slot query Void Int
-  , simulationConfig :: forall query. H.Slot query Void Int
-  , executionForm :: forall query. H.Slot query Void Int
+import Utils (rangeLoop, toLocaleString)
+import Web.Worker.Worker
+  ( Worker
+  , defaultWorkerOptions
+  , new
+  , onMessage
+  , postMessage
+  , terminate
   )
 
-_brainfuck = Proxy :: Proxy "brainfuck"
-_simulation = Proxy :: Proxy "simulation"
-_simulationConfig = Proxy :: Proxy "simulationConfig"
-_executionForm = Proxy :: Proxy "executionForm"
+debug = _debug "main"
 
-type BaseComponentState =
-  { route :: Maybe Route'
-  }
+main :: Effect Unit
+main = do
+  HA.runHalogenAff do
+    body <- HA.awaitBody
+    runUI mainComponent unit body
 
-baseComponent :: forall q i o m. MonadEffect m => MonadAff m => H.Component q i o m
-baseComponent =
-  H.mkComponent
-    { initialState: \_ -> { route: Just Home }
-    , render: baseRender
-    , eval: H.mkEval H.defaultEval { handleAction = baseHandleAction, initialize = Just Initialize }
-    }
+  log "Done"
 
-baseHandleAction :: forall cs o m. MonadEffect m => Action -> H.HalogenM BaseComponentState Action cs o m Unit
-baseHandleAction = case _ of
-  Initialize -> do
-    _ <- H.subscribe =<< H.liftEffect monitorRoute
-    currentHash <- H.liftEffect getHash
-    let
-      maybeInitialRoute = hush $ match route' currentHash
-      initialRoute = fromMaybe (Just Home) maybeInitialRoute
-    H.modify_ \st -> st { route = initialRoute }
-    pure unit
-  RouteChanged newRoute -> do
-    H.liftEffect $ log "Route change"
-    H.modify_ \st -> st { route = newRoute }
-  SetHash hash -> do
-    H.liftEffect $ setHash hash
-    pure unit
+type UseMetrics = Hooks.UseState ExperimentData <> Hooks.UseEffect <> Hooks.Pure
 
-monitorRoute :: Effect (HS.Emitter Action)
-monitorRoute = do
-  { emitter, listener } <- HS.create
-  void $ matches route' \old new ->
-    when (old /= Just new) do
-      HS.notify listener (RouteChanged new)
-  pure emitter
+type ExperimentData = { nInteractions :: Int, rate :: Number }
 
-baseRender :: forall m. MonadEffect m => MonadAff m => BaseComponentState -> H.ComponentHTML Action Slots m
-baseRender state =
-  let
-    component = case state.route of
-      Just Home -> HH.div_
-        [ HH.h1_ [ HH.text "Welcome" ]
-        , HH.p_
-            [ HH.text "This is a web app that allows you to run an artificial life experiment in your browser. It is an implementation of the paper "
-            , HH.a
-                [ HP.href "https://arxiv.org/pdf/2406.19108"
-                , HP.target "_blank"
-                ]
-                [ HH.text "Computational Life: How Well-formed, Self-replicating Programs Emerge from Simple Interaction" ]
-            , HH.text " by Blaise Agüera y Arcas et al. For more information, check out the longer explanation below, listen to "
-            , HH.a
-                [ HP.href "https://www.preposterousuniverse.com/podcast/2024/08/19/286-blaise-aguera-y-arcas-on-the-emergence-of-replication-and-computation/"
-                , HP.target "_blank"
-                ]
-                [ HH.text "this interview" ]
-            , HH.text " with one of the authors on the Mindscape podcast, check out this relevant "
-            , HH.a
-                [ HP.href "https://arxiv.org/pdf/2406.19108"
-                , HP.target "_blank"
-                ]
-                [ HH.text "article on Science.org" ]
-            , HH.text ", or read the paper itself."
-            ]
-        , HH.h2_ [ HH.text "If you know what to do" ]
-        , HH.p_ [ HH.text "You can start a simulation or walk through a single \"BFF\" program." ]
-        , HH.div
-            [ _classes "row justify-content-center" ]
-            [ HH.slot_ _simulationConfig 0 SimulationConfig.component unit ]
-        , HH.div
-            [ _classes "row mb-3 justify-content-center" ]
-            [ HH.slot_ _executionForm 0 ExecutionForm.component unit ]
-        , HH.h2_ [ HH.text "What is this?" ]
-        , HH.p_
-            [ HH.text "This is an \"artificial life\" experiment. The experiment works by initializing a population of random "
-            , HH.a
-                [ HP.href "https://en.wikipedia.org/wiki/Brainfuck"
-                , HP.target "_blank"
-                ]
-                [ HH.text "Brainfuck" ]
-            , HH.text " programs. Then, for each step of the experiment, two randomly-selected programs are concatenated and run as a single program. The program operates on itself - there is no separate data array as in a standard Brainfuck program. Then the program is split apart into two halves again. Thus, the two original programs have \"interacted\" to produce two new programs. This is done for many iterations. The authors of the paper write that over time the population of programs becomes more complex, and an ever-changing ecosystem of self-replicating programs emerges."
-            ]
-        , HH.p_
-            [ HH.text "As the experiment runs in your browser, it will display a graph of the number of \"computations\" in programs recently executed. By \"computations\", we mean the steps of a Brainfuck program that are not no-ops. At the start of the experiment, the randomly-initialized programs will tend to have a lot of no-ops because the programs are initialized with random ASCII characters, out which only a handful are Brainfuck commands that change the state of the system in any way. Over time, if the population of programs becomes more complex, that should be reflected in the graph." ]
-        , HH.h2_ [ HH.text "How do I use it?" ]
-        , HH.p_ [ HH.text "To start an experiment, fill out the first form above. You can set the population size (i.e. number of Brainfuck programs that are initialized and then interact with each other) and the program length (number of instructions in each Brainfuck program)." ]
-        , HH.p_
-            [ HH.text "You can also interactively step through a Brainfuck program to see how the language works. As mentioned above, this is actually a modified version of Brainfuck in which the program reads and writes to its own list of instructions rather than separate read and write tapes. For instance, "
-            , HH.a
-                [ HP.href "/#execution/1 2 3 4 5 6 7 8 9 0"
-                , HP.target "_blank"
-                ]
-                [ HH.text "this program" ]
-            , HH.text " shows an instance of the first half of a program copying itself onto the second half (figure 4 from the original paper)."
-            ]
-        , HH.h2_ [ HH.text "Why is it interesting?" ]
-        , HH.p_
-            [ HH.text "It's suprising that, over time, the program interactions lead to increasing complexity. Biological systems are, like Brainfuck, "
-            , HH.a
-                [ HP.href "https://www.embopress.org/doi/full/10.15252/embr.201846628"
-                , HP.target "_blank"
-                ]
-                [ HH.text "information-processing systems" ]
-            , HH.text " to some extent. Therefore, it's possible that that this experiment says something about the origin of life."
-            ]
-        , HH.div
-            [ _classes "row justify-content-center" ]
-            [ HH.blockquote
-                [ _classes "blockquote col-lg-6" ]
-                [ HH.p_ [ HH.text "I believe that I have somewhere said (but cannot find the passage) that the principle of continuity renders it probable that hereafter life will be shown to be a part or consequence of some general law; but this is only conjecture and not science" ]
-                , HH.footer
-                    [ _classes "blockquote-footer" ]
-                    [ HH.a
-                        [ HP.href "https://www.darwinproject.ac.uk/letter/DCP-LETT-13747.xml"
-                        , HP.target "_blank"
-                        ]
-                        [ HH.text "Charles Darwin" ]
-                    ]
-                ]
-            ]
-        , HH.h2_ [ HH.text "Who are you?" ]
-        , HH.p_
-            [ HH.text "I'm a "
-            , HH.a
-                [ HP.href "https://ricky0123.com"
-                , HP.target "_blank"
-                ]
-                [ HH.text "software engineer" ]
-            , HH.text " that heard "
-            , HH.a
-                [ HP.href "https://www.preposterousuniverse.com/podcast/2024/08/19/286-blaise-aguera-y-arcas-on-the-emergence-of-replication-and-computation/"
-                , HP.target "_blank"
-                ]
-                [ HH.text "an interview" ]
-            , HH.text " with one of the authors and decided to make a browser implementation of the experiment. I used it as an opportunity to play with "
-            , HH.a
-                [ HP.href "https://pursuit.purescript.org"
-                , HP.target "_blank"
-                ]
-                [ HH.text "PureScript" ]
-            , HH.text ", "
-            , HH.a
-                [ HP.href "https://github.com/purescript-halogen/purescript-halogen"
-                , HP.target "_blank"
-                ]
-                [ HH.text "Halogen" ]
-            , HH.text ", and the "
-            , HH.a
-                [ HP.href "https://developer.mozilla.org/en-US/docs/Web/API/Web_Workers_API/Using_web_workers"
-                , HP.target "_blank"
-                ]
-                [ HH.text "Web Workers API" ]
-            , HH.text ". You can find the source code on "
-            , HH.a
-                [ HP.href "https://github.com/ricky0123/life"
-                , HP.target "_blank"
-                ]
-                [ HH.text "GitHub" ]
-            , HH.text "."
-            ]
+useMetrics
+  :: forall m
+   . MonadAff m
+  => Metrics
+  -> Instant
+  -> Hook m UseMetrics (Maybe ExperimentData)
+useMetrics metrics startTime = Hooks.do
+  experimentData /\ experimentDataID <- Hooks.useState { nInteractions: 0, rate: -1.0 }
+
+  Hooks.useLifecycleEffect do
+    forkId <- Hooks.fork do
+      forever do
+        currentNInteractions <- liftEffect $ getNInteractions metrics
+        currentTime <- liftEffect now
+        let
+          (Seconds seconds) = diff currentTime startTime :: Seconds
+          rate = (toNumber currentNInteractions) / seconds :: Number
+        Hooks.modify_ experimentDataID $ _
+          { nInteractions = currentNInteractions, rate = rate }
+        liftAff $ delay $ Milliseconds 1000.0
+
+    pure $ Just $ Hooks.kill forkId
+  Hooks.pure $ Just experimentData
+
+type ExperimentSettings = { nPrograms :: Int, nWorkers :: Int }
+
+experimentComponent
+  :: forall q i o m. MonadAff m => ExperimentSettings -> H.Component q i o m
+experimentComponent settings = Hooks.component \_ _ -> Hooks.do
+  objectsContainer /\ objectsContainerId <- Hooks.useState Nothing
+
+  Hooks.useLifecycleEffect do
+    objectsValue <- liftEffect do
+      let
+        { nWorkers, nPrograms } = settings
+        programLength = defaultProgramLength
+
+      beforeInitializeSoup <- now
+      soup <- randomSharedArrayBuffer $ nPrograms * programLength
+      elapsedString <- getTimeElapsedString beforeInitializeSoup
+      debug $ elapsedString <> " Initialized Soup"
+
+      metricsBuffers <- newMetricsBuffers
+      permutationBuffer <- newPermutationBuffer nPrograms
+      masterCommandBuffer <- newMasterCommandBuffer
+      workerStatusBuffer <- newWorkerStatusBuffer nPrograms
+      let
+        metrics = metricsFromBuffers metricsBuffers
+
+      for_ (0 .. (nWorkers - 1)) \workerIndex -> do
+        debug $ "Starting worker " <> show workerIndex
+        let isMaster = workerIndex == 0
+        worker <- new "./worker.js" defaultWorkerOptions
+          { name = "worker-" <> show workerIndex }
+        worker # onMessage \ev -> debug ev
+        worker # postMessage
+          ( { soup
+            , nPrograms
+            , programLength
+            , metricsBuffers
+            , permutationBuffer
+            , masterCommandBuffer
+            , workerStatusBuffer
+            , isMaster
+            , workerIndex
+            , nWorkers
+            } :: WorkerConfigMessage
+          )
+
+      startTime <- now
+      pure { metrics, startTime, soup }
+    Hooks.modify_ objectsContainerId $ const $ Just objectsValue
+    pure Nothing
+
+  Hooks.pure do
+    HH.div_
+      [ HH.a [ HP.href "/", HP.target "_blank" ] [ HH.text "Start a new experiment" ]
+      , HH.p_ [ HH.text $ show settings ]
+      , case objectsContainer of
+          Nothing -> HH.text "Loading"
+          Just { metrics, startTime, soup } -> do
+            HH.div_
+              [ HH.slot_ _exp unit (_experimentComponent metrics startTime) unit
+              , HH.slot_ _plot unit (plotComponent metrics soup) unit
+              ]
+      ]
+
+_experimentComponent
+  :: forall q i o m. MonadAff m => Metrics -> Instant -> H.Component q i o m
+_experimentComponent metrics startTime = Hooks.component \_ _ -> Hooks.do
+  experimentData <- useMetrics metrics startTime
+  Hooks.pure do
+    case experimentData of
+      Nothing -> HH.p_ [ HH.text $ "Something went wrong" ]
+      Just { nInteractions, rate } -> HH.p_
+        [ HH.text $ "Interactions: " <> toLocaleString nInteractions
+        , HH.br_
+        , HH.text $ "Rate: " <> toLocaleString rate <> " interactions per second"
         ]
-      Just (ExecutionRoute program) -> case parseBrainFuckProgram program of
-        Just tape -> HH.div_ [ HH.slot_ _brainfuck 0 brainfuck { tape } ]
-        Nothing -> HH.text "Invalid program"
-      Just SimulationConfigRoute -> HH.div_ [ HH.slot_ _simulationConfig 0 SimulationConfig.component unit ]
-      Just (SimulationRoute maybePopulationSize maybeProgramLength) ->
-        fromMaybe (HH.text "Invalid simulation parameters") do
-          populationSize <- Int.fromString maybePopulationSize
-          programLength <- Int.fromString maybeProgramLength
-          pure $ HH.slot_ _simulation 0 Simulation.component { populationSize, programLength }
-      Nothing -> HH.text "Not Found"
-  in
-    HH.div
-      [ _classes "container pt-4 d-flex flex-column justify-content-between full-page" ]
-      [ component
-      , HH.div
-          [ _classes "d-flex flex-wrap justify-content-end align-items-center p-2 mt-2 border-top" ]
-          [ HH.div
-              [ _classes "me-4 fst-italic" ]
-              [ HH.text "A project by "
-              , HH.a
-                  [ HP.href "https://ricky0123.com"
-                  , HP.target "_blank"
+
+type Slots =
+  ( exp :: forall q o. H.Slot q Void o
+  , plot :: forall q o. H.Slot q Void o
+  , mainExp :: forall q o. H.Slot q Void o
+  )
+
+_plot = Proxy :: Proxy "plot"
+_exp = Proxy :: Proxy "exp"
+_mainExp = Proxy :: Proxy "mainExp"
+
+mainComponent
+  :: forall q i o m
+   . MonadAff m
+  => H.Component q i o m
+mainComponent = Hooks.component \_ _ -> Hooks.do
+  startDemo /\ startDemoId <- Hooks.useState false
+
+  settings /\ settingsId <- Hooks.useState
+    { nPrograms: defaultNPrograms, nWorkers: 5 }
+
+  Hooks.pure do
+    HH.div_
+      [ HH.p_
+          [ HH.text "This is an implementation in the browser of "
+          , HH.a
+              [ HP.href "https://arxiv.org/pdf/2406.19108"
+              , HP.target "_blank"
+              ]
+              [ HH.text
+                  "Computational Life: How Well-formed, Self-replicating Programs Emerge from Simple Interaction"
+              ]
+          , HH.text "."
+          ]
+      , if (not startDemo) then HH.div_
+          [ HH.div_
+              [ HH.label_
+                  [ HH.text "Number of programs" ]
+              , HH.input
+                  [ HP.type_ InputNumber
+                  , HP.value $ show settings.nPrograms
+                  , HP.min 10.0
+                  , HP.max 1000000.0
+                  , HE.onValueInput \raw ->
+                      Hooks.modify_ settingsId \old -> old
+                        { nPrograms = fromMaybe old.nPrograms (Int.fromString raw) }
                   ]
-                  [ HH.text "Ricky Samore" ]
               ]
           , HH.div_
-              [ HH.a
-                  [ HP.href "https://github.com/ricky0123/life"
-                  , HP.target "_blank"
-                  ]
-                  [ HH.i
-                      [ _classes "bi bi-github h2" ]
-                      []
+              [ HH.label_
+                  [ HH.text "Number of workers" ]
+              , HH.input
+                  [ HP.type_ InputNumber
+                  , HP.value $ show settings.nWorkers
+                  , HP.min 2.0
+                  , HP.max 500.0
+                  , HE.onValueInput \raw ->
+                      Hooks.modify_ settingsId \old -> old
+                        { nWorkers = fromMaybe old.nWorkers (Int.fromString raw) }
                   ]
               ]
+          , HH.button
+              [ HE.onClick \_ -> Hooks.modify_ startDemoId not ]
+              [ HH.text "Start experiment" ]
           ]
+        else HH.slot_ _mainExp unit (experimentComponent settings) unit
       ]
+
+plotComponent
+  :: forall q i o m. MonadAff m => Metrics -> SharedArrayBuffer -> H.Component q i o m
+plotComponent metrics soup = Hooks.component \_ _ -> Hooks.do
+  let
+    chartLabel = H.RefLabel "chart"
+    chartId = "chart"
+
+  Hooks.useLifecycleEffect do
+    refResult <- Hooks.getRef chartLabel
+    case refResult of
+      Nothing -> do
+        liftEffect $ debug "Chart div doesn't exist"
+        pure Nothing
+      Just _ -> do
+        updateFn <- liftEffect $ createLineChart
+          { title: "Simulation", elemId: chartId }
+
+        liftAff $ delay $ Milliseconds 30_000.0
+        compressionInteractionsArrayBuf <- liftEffect $ zerosSharedArrayBuffer
+          (4 * 4_000_000)
+        compressionArrayBuf <- liftEffect $ zerosSharedArrayBuffer (4 * 4_000_000)
+        let
+          compressionInteractions =
+            fromSharedBuffer compressionInteractionsArrayBuf :: Uint32Array
+          compression = fromSharedBuffer compressionArrayBuf :: Uint32Array
+
+        forkId <- Hooks.fork do
+          let
+            go ctx@{ noOpsEpoch, compressionEpoch } = do
+              liftEffect $ debug "Getting plot data"
+
+              currentInteractions <- liftEffect $ getNInteractions metrics
+              liftEffect $ writeAt compressionInteractions compressionEpoch
+                currentInteractions
+
+              timeIt "Got compression after" do
+                let uint8Soup = fromSharedBuffer soup :: Uint8Array
+                complexity <- liftEffect $ fflateGZipSync uint8Soup
+                liftEffect $ writeAt compression compressionEpoch complexity
+                liftEffect $ debug $ "Complexity = " <> show complexity
+
+              newNoOpsEpoch <- liftEffect $ readRecordLatest
+                metrics.noOpMetricRecord
+                noOpsEpoch
+
+              let
+                noOpsInteractions = slice metrics.interactionMetricRecord 0
+                  newNoOpsEpoch
+                noOps = slice metrics.noOpMetricRecord 0 newNoOpsEpoch
+                currentCompressionInteractions = slice compressionInteractions 0
+                  compressionEpoch
+                currentCompression = slice compression 0 compressionEpoch
+
+              liftEffect $ debug noOps
+              liftEffect $ debug currentCompression
+
+              liftEffect $ updateFn
+                { noOps: { interactions: noOpsInteractions, noOps }
+                , compression:
+                    { interactions: currentCompressionInteractions
+                    , compression: currentCompression
+                    }
+                }
+
+              liftAff $ delay $ Milliseconds 120_000.0
+              pure $ Loop ctx
+                { noOpsEpoch = newNoOpsEpoch, compressionEpoch = compressionEpoch + 1 }
+          tailRecM go { noOpsEpoch: 0, compressionEpoch: 0 }
+
+        pure Nothing
+
+  Hooks.pure do
+    HH.div_
+      [ HH.div
+          [ HP.id chartId, HP.ref chartLabel, HP.style "width: 1000px; height: 600px;" ]
+          []
+      ]
+
+timeIt :: forall m a. MonadEffect m => String -> m a -> m a
+timeIt logStr comp = do
+  startTime <- liftEffect now
+  res <- comp
+  timeStr <- liftEffect $ getTimeElapsedString startTime
+  liftEffect $ debug $ logStr <> " " <> timeStr
+  pure res
