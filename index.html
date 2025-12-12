@@ -4,9 +4,85 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Complexity V2</title>
-    <link rel="icon" href="data:," />
   </head>
   <body>
-    <script src="./index.js" type="module"></script>
+    <div id="app">
+      <script src="./index.js" type="module"></script>
+    </div>
+    <footer>
+      <div style="font-style: italic">
+        This is a work in progress! If you want to receive an email when this
+        project is finished, enter your email below:
+      </div>
+      <form id="signup-form" style="margin-top: 1rem">
+        <input
+          type="email"
+          name="email"
+          id="email"
+          placeholder="you@example.com"
+          required
+        />
+        <div class="cf-turnstile" data-sitekey="0x4AAAAAACGTVUPmIFsJov8d"></div>
+        <button type="submit">Subscribe</button>
+        <p id="form-status"></p>
+      </form>
+    </footer>
+
+    <script
+      src="https://challenges.cloudflare.com/turnstile/v0/api.js"
+      async
+      defer
+    ></script>
+    <script>
+      document
+        .getElementById("signup-form")
+        .addEventListener("submit", async (e) => {
+          e.preventDefault();
+
+          const status = document.getElementById("form-status");
+          const email = document.getElementById("email").value;
+          const turnstileResponse = document.querySelector(
+            '[name="cf-turnstile-response"]'
+          );
+          const turnstileToken = turnstileResponse
+            ? turnstileResponse.value
+            : "";
+
+          if (!turnstileToken) {
+            status.textContent = "Please complete the captcha";
+            return;
+          }
+
+          status.textContent = "Subscribing...";
+
+          try {
+            const response = await fetch(
+              "https://script.google.com/macros/s/AKfycbyPuITyMx8jkSDVphBGkBOf-0GfDwMqHx9XU4Y1449mKWi6HfXijoe-pt-W0nHGrT4U/exec",
+              {
+                method: "POST",
+                body: JSON.stringify({
+                  email,
+                  turnstileToken,
+                  source: window.location.hostname,
+                }),
+                headers: { "Content-Type": "text/plain" },
+              }
+            );
+
+            const result = await response.json();
+
+            if (result.success) {
+              status.textContent =
+                "Thanks! You'll hear from me when it's ready.";
+              e.target.reset();
+              turnstile.reset();
+            } else {
+              status.textContent = "Something went wrong. Try again?";
+            }
+          } catch (err) {
+            status.textContent = "Something went wrong. Try again?";
+          }
+        });
+    </script>
   </body>
 </html>

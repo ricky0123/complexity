@@ -63,6 +63,7 @@ import Prim.Row as Row
 import Record (get)
 import Type.Proxy (Proxy(..))
 import Utils (rangeLoop, toLocaleString)
+import Web.DOM.ParentNode (QuerySelector(..))
 import Web.Worker.Worker
   ( Worker
   , defaultWorkerOptions
@@ -77,8 +78,14 @@ debug = _debug "main"
 main :: Effect Unit
 main = do
   HA.runHalogenAff do
-    body <- HA.awaitBody
-    runUI mainComponent unit body
+    maybeAppDiv <- HA.selectElement (QuerySelector "#app")
+    case maybeAppDiv of
+      Nothing -> do
+        liftEffect $ debug "App container not found"
+        pure unit
+      Just appDiv -> do
+        _ <- runUI mainComponent unit appDiv
+        pure unit
 
   log "Done"
 

@@ -39,6 +39,7 @@ to generate this file without the comments in this block.
   , "tailrec"
   , "transformers"
   , "tuples"
+  , "web-dom"
   , "web-workers"
   ]
 , packages = ./packages.dhall
