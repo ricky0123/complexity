@@ -22,66 +22,99 @@
           placeholder="you@example.com"
           required
         />
-        <div class="cf-turnstile" data-sitekey="0x4AAAAAACGTVUPmIFsJov8d"></div>
+        <div id="turnstile-container"></div>
         <button type="submit">Subscribe</button>
         <p id="form-status"></p>
       </form>
     </footer>
-
-    <script
-      src="https://challenges.cloudflare.com/turnstile/v0/api.js"
-      async
-      defer
-    ></script>
     <script>
+      const TURNSTILE_SITEKEY = "0x4AAAAAACGTVUPmIFsJov8d";
+      const SUBMIT_URL =
+        "https://script.google.com/macros/s/AKfycbyPuITyMx8jkSDVphBGkBOf-0GfDwMqHx9XU4Y1449mKWi6HfXijoe-pt-W0nHGrT4U/exec";
+
+      let turnstileReady = false;
+      let turnstileToken = null;
+      let pendingSubmit = false;
+
+      function loadTurnstile() {
+        return new Promise((resolve) => {
+          if (window.turnstile) {
+            resolve();
+            return;
+          }
+          const script = document.createElement("script");
+          script.src =
+            "https://challenges.cloudflare.com/turnstile/v0/api.js?onload=onTurnstileLoad";
+          script.async = true;
+          window.onTurnstileLoad = resolve;
+          document.head.appendChild(script);
+        });
+      }
+
+      async function initTurnstile() {
+        await loadTurnstile();
+        turnstile.render("#turnstile-container", {
+          sitekey: TURNSTILE_SITEKEY,
+          callback: (token) => {
+            turnstileToken = token;
+            turnstileReady = true;
+            if (pendingSubmit) {
+              submitForm();
+            }
+          },
+        });
+      }
+
+      async function submitForm() {
+        const status = document.getElementById("form-status");
+        const email = document.getElementById("email").value;
+
+        status.textContent = "Subscribing...";
+
+        try {
+          const response = await fetch(SUBMIT_URL, {
+            method: "POST",
+            body: JSON.stringify({
+              email,
+              turnstileToken,
+              source: window.location.hostname,
+            }),
+            headers: { "Content-Type": "text/plain" },
+          });
+
+          const result = await response.json();
+
+          if (result.success) {
+            status.textContent = "Thanks! You'll hear from me when it's ready.";
+            document.getElementById("signup-form").reset();
+            turnstile.reset();
+            turnstileToken = null;
+            turnstileReady = false;
+          } else {
+            status.textContent = "Something went wrong. Try again?";
+          }
+        } catch (err) {
+          status.textContent = "Something went wrong. Try again?";
+        }
+
+        pendingSubmit = false;
+      }
+
       document
         .getElementById("signup-form")
         .addEventListener("submit", async (e) => {
           e.preventDefault();
 
           const status = document.getElementById("form-status");
-          const email = document.getElementById("email").value;
-          const turnstileResponse = document.querySelector(
-            '[name="cf-turnstile-response"]'
-          );
-          const turnstileToken = turnstileResponse
-            ? turnstileResponse.value
-            : "";
 
-          if (!turnstileToken) {
-            status.textContent = "Please complete the captcha";
+          if (!turnstileReady) {
+            status.textContent = "One moment...";
+            pendingSubmit = true;
+            initTurnstile();
             return;
           }
 
-          status.textContent = "Subscribing...";
-
-          try {
-            const response = await fetch(
-              "https://script.google.com/macros/s/AKfycbyPuITyMx8jkSDVphBGkBOf-0GfDwMqHx9XU4Y1449mKWi6HfXijoe-pt-W0nHGrT4U/exec",
-              {
-                method: "POST",
-                body: JSON.stringify({
-                  email,
-                  turnstileToken,
-                  source: window.location.hostname,
-                }),
-                headers: { "Content-Type": "text/plain" },
-              }
-            );
-
-            const result = await response.json();
-
-            if (result.success) {
-              status.textContent =
-                "Thanks! You'll hear from me when it's ready.";
-              e.target.reset();
-              turnstile.reset();
-            } else {
-              status.textContent = "Something went wrong. Try again?";
-            }
-          } catch (err) {
-            status.textContent = "Something went wrong. Try again?";
-          }
+          submitForm();
         });
     </script>
   </body>
