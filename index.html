@@ -29,8 +29,7 @@
     </footer>
     <script>
       const TURNSTILE_SITEKEY = "0x4AAAAAACGTVUPmIFsJov8d";
-      const SUBMIT_URL =
-        "https://script.google.com/macros/s/AKfycbyPuITyMx8jkSDVphBGkBOf-0GfDwMqHx9XU4Y1449mKWi6HfXijoe-pt-W0nHGrT4U/exec";
+      const SUBMIT_URL = "https://api.ricky0123.com/api/new-sign-up";
 
       let turnstileReady = false;
       let turnstileToken = null;
@@ -76,8 +75,9 @@
             method: "POST",
             body: JSON.stringify({
               email,
-              turnstileToken,
+              token: turnstileToken,
               source: window.location.hostname,
+              name: "unknown",
             }),
             headers: { "Content-Type": "text/plain" },
           });
@@ -85,7 +85,7 @@
           const result = await response.json();
 
           if (result.success) {
-            status.textContent = "Thanks! You'll hear from me when it's ready.";
+            status.textContent = "Thanks!";
             document.getElementById("signup-form").reset();
             turnstile.reset();
             turnstileToken = null;
